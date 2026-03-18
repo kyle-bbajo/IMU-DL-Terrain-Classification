@@ -16,6 +16,7 @@ from ..features.builder import get_feat_mask, combo_name
 from ..utils.config    import CFG, CLASS_NAMES
 from ..utils.logger    import log
 from ..utils.metrics   import compute_metrics, save_json, Timer
+from db.db import save_result
 
 
 def run_kfold(
@@ -59,7 +60,7 @@ def run_kfold(
                 X_all[te_idx], ft_te, y_all[te_idx],
                 branch_idx, input_mode,
             )
-            model = build_model(model_name, branch_ch, n_classes, n_feat=feat_dim)
+            model = build_model(model_name, branch_ch, n_classes, n_feat=feat_dim, input_mode=input_mode)
             acc, f1, yt, yp = run_fold(
                 model, model_name, n_classes, tr_dl, te_dl,
                 tag=f"[{model_name}|{input_mode}|F{fi}]",
@@ -72,6 +73,7 @@ def run_kfold(
     result = _aggregate(exp_name, model_name, input_mode, feat_combo, feat_dim,
                         all_yt, all_yp, n_classes, fold_res, str(t))
     save_json(result, res_path)
+    save_result(result)
     log(f"  ★ {exp_name}  Acc={result['acc']:.4f}  F1={result['macro_f1']:.4f}  ({t})")
     return result
 
@@ -112,7 +114,7 @@ def run_loso(
                 X_all[te_idx], ft_te, y_all[te_idx],
                 branch_idx, input_mode,
             )
-            model = build_model(model_name, branch_ch, n_classes, n_feat=feat_dim)
+            model = build_model(model_name, branch_ch, n_classes, n_feat=feat_dim, input_mode=input_mode)
             acc, f1, yt, yp = run_fold(
                 model, model_name, n_classes, tr_dl, te_dl,
                 tag=f"[LOSO|S{sid:02d}|{model_name}]",
@@ -127,6 +129,7 @@ def run_loso(
                         all_yt, all_yp, n_classes, [], str(t))
     result["per_subject"] = per_subj
     save_json(result, res_path)
+    save_result(result)
     log(f"  ★ LOSO {exp_name}  Acc={result['acc']:.4f}  F1={result['macro_f1']:.4f}  ({t})")
     return result
 
