@@ -16,22 +16,33 @@ from ..utils.logger import log
 def _forward(model: nn.Module, batch: tuple) -> tuple[torch.Tensor, torch.Tensor]:
     """배치 타입 자동 처리 → (logits_or_dict, y)"""
     is_hybrid = getattr(model, "IS_HYBRID", False)
-    is_flat   = isinstance(model, FlatCNN)
+    is_flat   = model.__class__.__name__ == "FlatCNN"
 
     if is_hybrid and len(batch) == 3:
+        # FusionNet: (bi_dict, feat, y)
         bi, feat, yb = batch
         bi   = {k: v.to(DEVICE, non_blocking=True) for k, v in bi.items()}
         feat = feat.to(DEVICE, non_blocking=True)
         out  = model(bi, feat)
     elif len(batch) == 2 and isinstance(batch[0], dict):
+        # BranchCNN / ResNet1D / ResNetTCN: (bi_dict, y)
         bi, yb = batch
         bi = {k: v.to(DEVICE, non_blocking=True) for k, v in bi.items()}
         if is_flat:
-            # FlatCNN: dict → (B, C, T) concat
-            x = torch.cat(list(bi.values()), dim=1)
+            # FlatCNN: dict → (B, 54, 256) concat
+            x = torch.cat([v for v in bi.values()], dim=1)
             out = model(x)
         else:
             out = model(bi)
+    elif len(batch) == 2 and not isinstance(batch[0], dict):
+        # FeatDataset: (feat_tensor, y)
+        xb, yb = batch
+        xb = xb.to(DEVICE, non_blocking=True)
+        if is_hybrid:
+            # FusionNet을 feat only로 쓸 때 → 빈 bi + feat
+            out = model({}, xb)
+        else:
+            out = model(xb)
     else:
         xb, yb = batch
         out = model(xb.to(DEVICE, non_blocking=True))
