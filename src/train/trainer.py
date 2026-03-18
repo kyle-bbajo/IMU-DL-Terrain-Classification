@@ -3,26 +3,30 @@ import copy, gc
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
 from sklearn.metrics import accuracy_score, f1_score
-
 from .losses   import build_criterion
 from ..utils.config import CFG, DEVICE, USE_AMP, AMP_DTYPE
 from ..utils.logger import log
 
 
-def _forward(model: nn.Module, batch):
+def _forward(model, batch):
     is_hybrid = getattr(model, "IS_HYBRID", False)
     is_flat   = model.__class__.__name__ in ("FlatCNN", "_FeatureMLP")
 
+    # FusionDataset → (bi_dict, feat, y)
     if len(batch) == 3:
         bi, feat, yb = batch
-        if isinstance(bi, dict):
-            bi   = {k: v.to(DEVICE, non_blocking=True) for k, v in bi.items()}
-            feat = feat.to(DEVICE, non_blocking=True)
-            out  = model(bi, feat) if is_hybrid else model(bi)
+        bi   = {k: v.to(DEVICE, non_blocking=True) for k, v in bi.items()}
+        feat = feat.to(DEVICE, non_blocking=True)
+        if is_hybrid:
+            out = model(bi, feat)
+        elif is_flat:
+            # FlatCNN raw_feat 모드: dict concat
+            out = model(torch.cat(list(bi.values()), dim=1))
         else:
-            out = model(bi.to(DEVICE, non_blocking=True))
+            out = model(bi)
+
+    # BranchDataset → (bi_dict, y)
     elif len(batch) == 2 and isinstance(batch[0], dict):
         bi, yb = batch
         bi = {k: v.to(DEVICE, non_blocking=True) for k, v in bi.items()}
@@ -30,6 +34,8 @@ def _forward(model: nn.Module, batch):
             out = model(torch.cat(list(bi.values()), dim=1))
         else:
             out = model(bi)
+
+    # FeatDataset → (feat_tensor, y)
     else:
         xb, yb = batch
         out = model(xb.to(DEVICE, non_blocking=True))
@@ -102,7 +108,8 @@ class Trainer:
         if self.best_state:
             self.model.load_state_dict(self.best_state)
         yt, yp = self.evaluate(te_loader)
-        return accuracy_score(yt,yp), f1_score(yt,yp,average="macro",zero_division=0), \
+        return accuracy_score(yt,yp), \
+               f1_score(yt,yp,average="macro",zero_division=0), \
                np.array(yt), np.array(yp)
 
 
