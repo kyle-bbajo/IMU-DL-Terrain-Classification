@@ -6,7 +6,7 @@ src/models/branchcnn.py — BranchCNN
 """
 from __future__ import annotations
 import torch, torch.nn as nn
-from .blocks import ConvBNReLU, CBAM, SEBlock, CrossGroupAttn, FreqBranch, _init
+from .blocks import ConvBNReLU, CBAM, SEBlock, CrossGroupAttn, _init
 from ..utils.config import CFG
 
 
