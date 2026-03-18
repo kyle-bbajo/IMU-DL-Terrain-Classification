@@ -55,7 +55,7 @@ class Config:
     kfold:        int   = 5
     epochs:       int   = 80
     early_stop:   int   = 15
-    batch:        int   = 4096      # L4 24GB → 큰 배치
+    batch:        int   = 2048      # L4 24GB → 큰 배치
     lr:           float = 1e-3
     min_lr:       float = 1e-6
     weight_decay: float = 1e-3
