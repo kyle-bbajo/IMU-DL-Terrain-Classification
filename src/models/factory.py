@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """src/models/factory.py — 모델 팩토리"""
 from __future__ import annotations
-from .flatcnn   import FlatCNN
-from .branchcnn import BranchCNN
-from .resnet1d  import ResNet1D
-from .resnet_tcn import ResNetTCN
-from .fusionnet  import FusionNet
+from .m1_flatcnn   import FlatCNN
+from .m2_branchcnn import BranchCNN
+from .m3_resnet1d  import ResNet1D
+from .m4_resnet_tcn import ResNetTCN
+from .m5_fusionnet  import FusionNet
 
 # 논문 이름 → 클래스 매핑
 MODEL_REGISTRY: dict[str, type] = {

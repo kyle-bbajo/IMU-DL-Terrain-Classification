@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 from sklearn.metrics import accuracy_score, f1_score
 
 from .losses   import build_criterion
-from ..models.flatcnn import FlatCNN
+from ..models.m1_flatcnn import FlatCNN
 from ..utils.config import CFG, DEVICE, USE_AMP, AMP_DTYPE
 from ..utils.logger import log
 
