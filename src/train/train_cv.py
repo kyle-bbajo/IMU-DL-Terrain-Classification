@@ -16,7 +16,7 @@ from ..features.builder import get_feat_mask, combo_name
 from ..utils.config    import CFG, CLASS_NAMES
 from ..utils.logger    import log
 from ..utils.metrics   import compute_metrics, save_json, Timer
-from db.db import save_result
+from ..utils.db import save_result
 
 
 def run_kfold(
