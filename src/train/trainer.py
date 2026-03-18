@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader
 from sklearn.metrics import accuracy_score, f1_score
 
 from .losses   import build_criterion
+from ..models.flatcnn import FlatCNN
 from ..utils.config import CFG, DEVICE, USE_AMP, AMP_DTYPE
 from ..utils.logger import log
 
@@ -15,6 +16,7 @@ from ..utils.logger import log
 def _forward(model: nn.Module, batch: tuple) -> tuple[torch.Tensor, torch.Tensor]:
     """배치 타입 자동 처리 → (logits_or_dict, y)"""
     is_hybrid = getattr(model, "IS_HYBRID", False)
+    is_flat   = isinstance(model, FlatCNN)
 
     if is_hybrid and len(batch) == 3:
         bi, feat, yb = batch
@@ -23,7 +25,13 @@ def _forward(model: nn.Module, batch: tuple) -> tuple[torch.Tensor, torch.Tensor
         out  = model(bi, feat)
     elif len(batch) == 2 and isinstance(batch[0], dict):
         bi, yb = batch
-        out = model({k: v.to(DEVICE, non_blocking=True) for k, v in bi.items()})
+        bi = {k: v.to(DEVICE, non_blocking=True) for k, v in bi.items()}
+        if is_flat:
+            # FlatCNN: dict → (B, C, T) concat
+            x = torch.cat(list(bi.values()), dim=1)
+            out = model(x)
+        else:
+            out = model(bi)
     else:
         xb, yb = batch
         out = model(xb.to(DEVICE, non_blocking=True))

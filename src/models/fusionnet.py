@@ -6,7 +6,7 @@ src/models/fusionnet.py — FusionNet (제안 모델)
 from __future__ import annotations
 import torch, torch.nn as nn, torch.nn.functional as F
 from .blocks import ConvBNReLU, CBAM, CrossGroupAttn, _init
-from ..utils.config import CFG, N_FEATURES  # type: ignore
+from ..utils.config import CFG
 
 
 def _augment(x, training):
