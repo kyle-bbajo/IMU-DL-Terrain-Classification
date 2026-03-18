@@ -1,96 +1,67 @@
-# -*- coding: utf-8 -*-
-"""src/train/trainer.py — 핵심 학습 루프"""
 from __future__ import annotations
 import copy, gc
 import numpy as np
-import torch, torch.nn as nn
+import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
 from sklearn.metrics import accuracy_score, f1_score
 
 from .losses   import build_criterion
-from ..models.m1_flatcnn import FlatCNN
 from ..utils.config import CFG, DEVICE, USE_AMP, AMP_DTYPE
 from ..utils.logger import log
 
 
-def _forward(model: nn.Module, batch: tuple) -> tuple[torch.Tensor, torch.Tensor]:
-    """배치 타입 자동 처리 → (logits_or_dict, y)"""
+def _forward(model: nn.Module, batch):
     is_hybrid = getattr(model, "IS_HYBRID", False)
-    is_flat   = model.__class__.__name__ == "FlatCNN"
+    is_flat   = model.__class__.__name__ in ("FlatCNN", "_FeatureMLP")
 
-    if is_hybrid and len(batch) == 3:
-        # FusionNet: (bi_dict, feat, y)
+    if len(batch) == 3:
         bi, feat, yb = batch
-        bi   = {k: v.to(DEVICE, non_blocking=True) for k, v in bi.items()}
-        feat = feat.to(DEVICE, non_blocking=True)
-        out  = model(bi, feat)
+        if isinstance(bi, dict):
+            bi   = {k: v.to(DEVICE, non_blocking=True) for k, v in bi.items()}
+            feat = feat.to(DEVICE, non_blocking=True)
+            out  = model(bi, feat) if is_hybrid else model(bi)
+        else:
+            out = model(bi.to(DEVICE, non_blocking=True))
     elif len(batch) == 2 and isinstance(batch[0], dict):
-        # BranchCNN / ResNet1D / ResNetTCN: (bi_dict, y)
         bi, yb = batch
         bi = {k: v.to(DEVICE, non_blocking=True) for k, v in bi.items()}
         if is_flat:
-            # FlatCNN: dict → (B, 54, 256) concat
-            x = torch.cat([v for v in bi.values()], dim=1)
-            out = model(x)
+            out = model(torch.cat(list(bi.values()), dim=1))
         else:
             out = model(bi)
-    elif len(batch) == 2 and not isinstance(batch[0], dict):
-        # FeatDataset: (feat_tensor, y)
-        xb, yb = batch
-        xb = xb.to(DEVICE, non_blocking=True)
-        if is_hybrid:
-            # FusionNet을 feat only로 쓸 때 → 빈 bi + feat
-            out = model({}, xb)
-        else:
-            out = model(xb)
     else:
         xb, yb = batch
         out = model(xb.to(DEVICE, non_blocking=True))
 
+    if isinstance(out, dict):
+        out = out["final_logits"]
     return out, yb
 
 
-def _get_logits(out) -> torch.Tensor:
-    if isinstance(out, dict):
-        return out["final_logits"]
-    return out
-
-
-def _mixup(x, y, alpha=0.2):
-    if alpha <= 0: return x, y, y, 1.0
-    lam = np.random.beta(alpha, alpha)
-    idx = torch.randperm(x.size(0), device=x.device)
-    return x * lam + x[idx] * (1 - lam), y, y[idx], lam
-
-
 class Trainer:
-    def __init__(self, model: nn.Module, model_name: str, n_classes: int):
+    def __init__(self, model, model_name, n_classes):
         self.model      = model.to(DEVICE)
         self.model_name = model_name
         self.criterion  = build_criterion(model_name, n_classes)
         self.opt        = torch.optim.AdamW(
-            model.parameters(), lr=CFG.lr, weight_decay=CFG.weight_decay
-        )
+            model.parameters(), lr=CFG.lr, weight_decay=CFG.weight_decay)
         self.scaler     = torch.amp.GradScaler("cuda", enabled=USE_AMP)
         self.best_f1    = -1.0
         self.best_state = None
         self.patience   = 0
 
-    def _schedule(self, epochs: int):
+    def _schedule(self, epochs):
         return torch.optim.lr_scheduler.CosineAnnealingLR(
-            self.opt, T_max=epochs, eta_min=CFG.min_lr
-        )
+            self.opt, T_max=epochs, eta_min=CFG.min_lr)
 
-    def train_epoch(self, loader: DataLoader):
+    def train_epoch(self, loader):
         self.model.train()
         for batch in loader:
             self.opt.zero_grad()
             with torch.amp.autocast("cuda", enabled=USE_AMP, dtype=AMP_DTYPE):
                 out, yb = _forward(self.model, batch)
-                logits  = _get_logits(out)
-                yb      = yb.to(DEVICE)
-                loss    = self.criterion(out, yb) if isinstance(out, dict) \
-                          else self.criterion(logits, yb)
+                loss    = self.criterion(out, yb.to(DEVICE))
             self.scaler.scale(loss).backward()
             self.scaler.unscale_(self.opt)
             nn.utils.clip_grad_norm_(self.model.parameters(), CFG.grad_clip)
@@ -98,24 +69,16 @@ class Trainer:
             self.scaler.update()
 
     @torch.no_grad()
-    def evaluate(self, loader: DataLoader) -> tuple[list, list]:
+    def evaluate(self, loader):
         self.model.eval()
         yt, yp = [], []
         for batch in loader:
             out, yb = _forward(self.model, batch)
-            pred    = _get_logits(out).argmax(1).cpu().numpy()
-            yp.extend(pred.tolist())
+            yp.extend(out.argmax(1).cpu().numpy().tolist())
             yt.extend(yb.cpu().numpy().tolist())
         return yt, yp
 
-    def fit(
-        self,
-        tr_loader: DataLoader,
-        te_loader: DataLoader,
-        epochs: int    = None,
-        early_stop: int = None,
-        tag: str       = "",
-    ) -> tuple[float, float, np.ndarray, np.ndarray]:
+    def fit(self, tr_loader, te_loader, epochs=None, early_stop=None, tag=""):
         epochs     = epochs     or CFG.epochs
         early_stop = early_stop or CFG.early_stop
         sch        = self._schedule(epochs)
@@ -123,50 +86,30 @@ class Trainer:
         for ep in range(1, epochs + 1):
             self.train_epoch(tr_loader)
             sch.step()
-
             yt, yp = self.evaluate(te_loader)
-            f1 = f1_score(yt, yp, average="macro", zero_division=0)
+            f1     = f1_score(yt, yp, average="macro", zero_division=0)
 
             if f1 > self.best_f1:
-                self.best_f1    = f1
-                self.best_state = copy.deepcopy(self.model.state_dict())
-                self.patience   = 0
+                self.best_f1, self.best_state, self.patience = \
+                    f1, copy.deepcopy(self.model.state_dict()), 0
             else:
-                self.patience  += 1
-                if self.patience >= early_stop:
-                    break
+                self.patience += 1
+                if self.patience >= early_stop: break
 
             if ep % 10 == 0 or ep == epochs:
-                acc = accuracy_score(yt, yp)
-                log(f"  {tag} ep{ep:03d}  acc={acc:.4f}  f1={f1:.4f}  best={self.best_f1:.4f}")
+                log(f"  {tag} ep{ep:03d}  acc={accuracy_score(yt,yp):.4f}  f1={f1:.4f}")
 
-        # 최고 모델 복원
         if self.best_state:
             self.model.load_state_dict(self.best_state)
-
-        yt, yp  = self.evaluate(te_loader)
-        acc     = accuracy_score(yt, yp)
-        f1      = f1_score(yt, yp, average="macro", zero_division=0)
-        return acc, f1, np.array(yt), np.array(yp)
+        yt, yp = self.evaluate(te_loader)
+        return accuracy_score(yt,yp), f1_score(yt,yp,average="macro",zero_division=0), \
+               np.array(yt), np.array(yp)
 
 
-def run_fold(
-    model: nn.Module,
-    model_name: str,
-    n_classes: int,
-    tr_loader: DataLoader,
-    te_loader: DataLoader,
-    tag: str = "",
-    epochs: int    = None,
-    early_stop: int = None,
-) -> tuple[float, float, np.ndarray, np.ndarray]:
-    """단일 fold 학습 → (acc, f1, y_true, y_pred)"""
+def run_fold(model, model_name, n_classes, tr_loader, te_loader,
+             tag="", epochs=None, early_stop=None):
     trainer = Trainer(model, model_name, n_classes)
-    acc, f1, yt, yp = trainer.fit(tr_loader, te_loader, epochs, early_stop, tag)
-
-    del trainer
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-    return acc, f1, yt, yp
+    result  = trainer.fit(tr_loader, te_loader, epochs, early_stop, tag)
+    del trainer; gc.collect()
+    if torch.cuda.is_available(): torch.cuda.empty_cache()
+    return result
